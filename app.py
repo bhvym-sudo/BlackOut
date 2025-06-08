@@ -2,8 +2,10 @@ import os
 import sys
 import time
 import threading
-from core.server import start_server
-from core.client import ChatClient
+import socket
+import json
+import random
+from core.p2p_node import P2PNode
 from utils.tor_service import start_tor_service
 
 def clear_screen():
@@ -19,7 +21,7 @@ def print_banner():
 ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗╚██████╔╝╚██████╔╝   ██║   
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   
                                                                     
-    Secure Console Chat via Tor Hidden Service
+    P2P Secure Console Chat via Tor Hidden Service
     """)
 
 def print_menu():
@@ -30,11 +32,11 @@ def print_menu():
     print("4. Exit")
     print("\nSelect an option: ", end="")
 
-def chat_room(client):
+def chat_room(node):
     clear_screen()
-    print(f"=== CHAT ROOM: {client.room_code} ===")
+    print(f"=== CHAT ROOM: {node.room_code} ===")
     print("Type your message and press Enter to send.")
-    print("Commands: /exit, /clear, /delete [msg_id], /history")
+    print("Commands: /exit, /clear, /delete [msg_id], /history, /peers")
     print("=" * 50)
     
     while True:
@@ -45,51 +47,53 @@ def chat_room(client):
                 break
             elif user_input.lower() == "/clear":
                 clear_screen()
-                print(f"=== CHAT ROOM: {client.room_code} ===")
+                print(f"=== CHAT ROOM: {node.room_code} ===")
             elif user_input.lower().startswith("/delete "):
                 msg_id = user_input.split(" ", 1)[1].strip()
-                client.delete_message(msg_id)
+                node.delete_message(msg_id)
                 print(f"[System] Requested deletion of message {msg_id}")
             elif user_input.lower() == "/history":
                 clear_screen()
                 print("=== MESSAGE HISTORY ===")
-                for msg in client.message_history:
+                for msg in node.message_history:
                     print(f"[{msg['msg_id']}] {msg['username']}: {msg['message']}")
                 print("=" * 50)
+            elif user_input.lower() == "/peers":
+                print(f"[System] Connected peers: {len(node.peers)}")
+                for peer in node.peers:
+                    print(f"  - {peer}")
             elif user_input.strip():
-                client.send_message(user_input)
+                node.send_message(user_input)
         except KeyboardInterrupt:
             break
         except Exception as e:
             print(f"[-] Error: {e}")
     
     print("[+] Leaving chat room...")
-    client.disconnect()
+    node.disconnect()
 
 def main():
     print_banner()
     
-    port = 8000
+    port = random.randint(8000, 9000)
     
-    print("[+] Initializing BlackOut secure chat...")
+    print("[+] Initializing BlackOut P2P secure chat...")
     
     tor_process, onion_address = start_tor_service(port)
     if not onion_address:
-        print("[-] Failed to get onion address. Using local address only.")
-        server_url = f"http://127.0.0.1:{port}"
-    else:
-        server_url = f"http://{onion_address}"
+        print("[-] Failed to get onion address. Exiting.")
+        return
     
-    print(f"[+] Server URL: {server_url}")
+    print(f"[+] Your onion address: {onion_address}")
     
-    if not start_server(port=port):
-        print("[-] Failed to start server")
+    node = P2PNode(port=port, onion_address=onion_address)
+    
+    if not node.start():
+        print("[-] Failed to start P2P node")
         tor_process.terminate()
         return
     
     time.sleep(2)
-    
-    client = ChatClient(server_url=f"http://127.0.0.1:{port}")
     
     try:
         while True:
@@ -97,35 +101,36 @@ def main():
             choice = input()
             
             if choice == "1":
-                if client.connect():
-                    room_code = client.create_room()
-                    if room_code:
-                        username = input("Enter your username: ")
-                        if client.join_room(room_code, username):
-                            print(f"[+] Room created and joined: {room_code}")
-                            print(f"[+] Share this code with others: {room_code}")
-                            input("Press Enter to continue to chat...")
-                            chat_room(client)
-                    else:
-                        client.disconnect()
+                room_code = node.create_room()
+                if room_code:
+                    username = input("Enter your username: ")
+                    node.set_username(username)
+                    print(f"[+] Room created: {room_code}")
+                    print(f"[+] Your onion address: {onion_address}")
+                    print(f"[+] Share this info with others to join:")
+                    print(f"    Room Code: {room_code}")
+                    print(f"    Onion Address: {onion_address}")
+                    input("Press Enter to continue to chat...")
+                    chat_room(node)
             
             elif choice == "2":
                 room_code = input("Enter room code: ")
+                peer_onion = input("Enter peer's onion address: ")
                 username = input("Enter your username: ")
                 
-                if client.connect():
-                    if client.join_room(room_code, username):
-                        input("Press Enter to continue to chat...")
-                        chat_room(client)
-                    else:
-                        client.disconnect()
+                if node.join_room(room_code, peer_onion, username):
+                    input("Press Enter to continue to chat...")
+                    chat_room(node)
             
             elif choice == "3":
                 clear_screen()
-                print("=== ABOUT BLACKOUT ===")
-                print("BlackOut is a secure chat application that operates over Tor hidden services.")
+                print("=== ABOUT BLACKOUT P2P ===")
+                print("BlackOut P2P is a decentralized secure chat application.")
+                print("Each participant is both server and client.")
                 print("All messages are encrypted with AES-128 in CBC mode.")
+                print("No central server - direct peer-to-peer communication.")
                 print("This tool is designed for secure communications for journalists and whistleblowers.")
+                print("Made by bhvym , bhvym72@gmail.com")
                 print("\nPress Enter to return to menu...")
                 input()
                 print_banner()
@@ -139,6 +144,8 @@ def main():
     except KeyboardInterrupt:
         print("\n[+] Shutting down...")
     finally:
+        print("[+] Stopping P2P node...")
+        node.stop()
         print("[+] Terminating Tor process...")
         tor_process.terminate()
         tor_process.wait()
